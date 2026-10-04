@@ -12,13 +12,13 @@
     "claude-code",
     "claude-code-plugin"
   ],
-  "homepage": "https://github.com/tamaratran/fast-jev-compaction#readme",
+  "homepage": "https://github.com/reliable-era/fast-jev-compaction#readme",
   "bugs": {
-    "url": "https://github.com/tamaratran/fast-jev-compaction/issues"
+    "url": "https://github.com/reliable-era/fast-jev-compaction/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tamaratran/fast-jev-compaction.git"
+    "url": "git+https://github.com/reliable-era/fast-jev-compaction.git"
   },
   "type": "module",
   "license": "MIT",
