@@ -1,213 +1,275 @@
-# fast-jev-compaction
+# fast-jev-compaction — reliable-era Pi extension fork
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+This fork adapts [`tamaratran/fast-jev-compaction`](https://github.com/tamaratran/fast-jev-compaction) for the **Pi coding-agent harness** while keeping the original library and Claude Code plugin intact.
 
-## What and why
+The important delta is not a new summarizer. It is a Pi extension that lets Pi compaction preserve old context as a Jev-pruned, mostly-verbatim transcript instead of relying only on an LLM-written summary.
 
-Most context compaction asks an LLM to summarize old turns. A summary is
-lossy: a file path, exact error, constraint, or command can disappear even when
-it matters later. This library never rewrites anything. It only deletes tool
-calls and tool results Jev says are no longer needed, and it asks Jev while
-showing it the whole conversation. User and assistant text stays verbatim and
-in order.
+## What we updated
 
-The repository is both an npm package (`src/`) and a Claude Code plugin
-(`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
-built-in compaction summary with the original messages.
+### 1. Added Pi extension support
 
-## How it works
+This fork includes the Pi integration from upstream PR #22 and publishes it through the package manifest:
 
-1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
-   the first message or in the newest `preserveRecentMessages` messages are
-   pinned and never touched.
-2. The **state** sent to Jev is the whole conversation so far, oldest first,
-   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
-   Tool inputs are included, texts are included, nothing is summarized.
-3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
-   applied only if the previous one was not enough: tool inputs truncated to
-   1000, then 200, then 60 characters; long texts abridged to head + tail,
-   oldest non-pinned messages first; old non-pinned messages collapsed to a
-   `[… N chars omitted …]` note; old tool calls reduced to one line each
-   (`t12 Read file_path=src/a.ts → ok 480ch`); old call-less messages left
-   out; runs of old call-only messages folded into one entry. If it still
-   does not fit, compaction throws. Tokens are estimated without a tokenizer (a
-   word per six letters, half a token per digit, ~one per other symbol),
-   calibrated to land a little above the counts Jev reports.
-4. For every non-pinned call Jev gets two `noul` questions: should the **call**
-   stay (knowing it was made, with its input, still matters), and should the
-   **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
-5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
-7. The message list is rebuilt: a message that loses all its content is
-   removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
-
-Jev failures, malformed answers, a missing key, or a history that cannot be
-fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
-
-## Install and usage
-
-```sh
-npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
-```
-
-```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
-
-const transcript: Message[] = [
-  { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
-  {
-    role: 'assistant',
-    text: '',
-    toolUses: [{ tool_use_id: 'toolu_1', tool: 'Read', input: { file_path: 'src/a.ts' } }],
-  },
-  { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'toolu_1', text: '…file…' }] },
-  // …
-];
-
-const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
-console.log(result.messages, result.decisions, result.stats);
-if (reductionRatio(result) < 0.25) {
-  // not worth it: keep the original transcript, or summarize instead
+```json
+{
+  "pi": {
+    "extensions": ["./pi/index.ts"]
+  }
 }
 ```
 
-`Message` is a subset of Claude Code's `SessionMessage`, so a session transcript
-can be passed in as is.
+Main files:
 
-To bring your own transport, implement `JevAsker` (one `ask(state, questions)`
-method) and call `compact(messages, asker, options)`; `buildJevRequest` and
-`parseJevResponse` give you the HTTP request body and response validation.
-The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
-`decideCall`, `applyDecisions`) are exported too.
-
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
-
-## Options
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
-| `fetch` | native `fetch` | Injectable fetch implementation for tests |
-| `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
-| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
-| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
-
-`result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
-stage was needed, and the number of requests.
-
-## Limitations
-
-- Only tool calls and results are candidates; text messages are never removed
-  or shortened in the output (they are only abridged in the state Jev sees).
-- Token sizes are estimates from character counts, not a tokenizer.
-- Calibration is at the request level; a probability is not a proof that a
-  result is safe to delete. The assistant can always re-run the tool.
-- The full state is repeated with every request, so a history near the state
-  ceiling costs one request per handful of questions.
-
-## Claude Code plugin
-
-The repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`
-is a thin adapter that feeds `session.compact` transcripts through `src/` and
-falls back to Claude Code's built-in summary on errors or insufficient
-reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
-Claude Code 2.1.274 type reference.
-
-### Install in Claude Code
-
-Function hooks are an early-access Claude Code feature (2.1.274+), so the
-opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:
-
-```json
-{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
+```text
+pi/index.ts       # Pi extension hook registration
+pi/core.ts        # Pi-specific conversion, config, Jev orchestration, serialization
+types/pi.d.ts     # Ambient Pi type surface for offline typecheck/tests
+pi/README.md      # Pi-specific behavior/config docs
+tests/pi.test.ts  # Offline Pi compaction behavior tests
 ```
 
-Then add this repository as a plugin marketplace and install the plugin,
-either from the shell or as slash commands inside a session:
+### 2. Adapted package metadata for reliable-era
 
-```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+The package metadata now points to this fork:
+
+```text
+https://github.com/reliable-era/fast-jev-compaction
 ```
 
-The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
-Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
-auto-compaction) goes through Jev: the toast reads
-`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
-replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
-could not remove enough (short sessions, or when it fails).
-
-To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
-from the repository root. No publishing step is required; the marketplace is
-just the repo's `.claude-plugin/marketplace.json`.
-
-## pi extension
-
-`pi/` is a [pi](https://github.com/earendil-works/pi-mono) extension, and the
-repository manifest (`"pi": { "extensions": ["./pi/index.ts"] }`) lets pi
-install it as a package:
+Pi install command:
 
 ```sh
 pi install git:github.com/reliable-era/fast-jev-compaction
 ```
 
-pi's compaction replaces the context with a summary plus the messages after
-`firstKeptEntryId`. The extension keeps that kept window untouched and writes
-the old region into the summary as a **verbatim transcript** minus the tool
-calls and results Jev drops or truncates — the pi equivalent of the Claude
-Code hook returning the pruned message list. The whole branch is re-examined
-on every compaction, so a result kept last round can still be pruned later.
-It falls back to pi's built-in summary when the key is missing, when Jev
-fails, or when the old region cannot be reduced enough. See
-[`pi/README.md`](pi/README.md) for configuration and the mapping in detail.
+### 3. Added fork/package wiring tests
+
+Added:
+
+```text
+tests/pi-package.test.ts
+```
+
+It verifies that:
+
+- the package is discoverable as a Pi package;
+- `pi.extensions` points to `./pi/index.ts`;
+- `pi/` and `src/` are shipped;
+- Pi host packages are optional peers, not bundled runtime dependencies;
+- README/package metadata point to `reliable-era`, not the original install path.
+
+### 4. Kept upstream functionality intact
+
+The original pieces remain available:
+
+- npm library under `src/`;
+- Claude Code plugin under `hooks/` and `.claude-plugin/`;
+- existing compaction algorithm and tests.
+
+## Why we did this
+
+Pi's compaction model is different from Claude Code's.
+
+Claude Code can return a pruned message list from the hook. Pi compaction instead replaces old context with:
+
+```text
+compaction summary + real messages from firstKeptEntryId onward
+```
+
+So the Pi extension cannot simply hand Pi a filtered message array. The practical extension-only solution is:
+
+1. keep Pi's recent kept window untouched as real session messages;
+2. convert the older region into the fast-jev message model;
+3. ask Jev which tool calls/results remain useful;
+4. write the old region into the compaction summary as a **verbatim serialized transcript**, with stale tool calls/results removed or truncated;
+5. fall back to Pi's built-in compaction if Jev is unavailable or reduction is insufficient.
+
+This preserves exact user/assistant text, commands, paths, errors, constraints, and retained tool outputs better than a normal lossy summary, while still reducing context size.
+
+## How to use in Pi
+
+Install/update the extension:
+
+```sh
+pi install git:github.com/reliable-era/fast-jev-compaction
+# later updates:
+pi update --extensions
+```
+
+Make sure a TypeSafe key is available by one of:
+
+```sh
+export TYPESAFE_API_KEY=...
+```
+
+or Pi auth/config as described in [`pi/README.md`](pi/README.md).
+
+Then use Pi normally:
+
+```text
+/compact
+```
+
+or run the explicit command registered by the extension:
+
+```text
+/fast-jev-compact
+```
+
+## How we evaluated it
+
+### Static/type checks
+
+```sh
+npm run typecheck
+```
+
+This runs:
+
+```text
+tsc --noEmit
+tsc -p tsconfig.hooks.json
+tsc -p tsconfig.pi.json
+```
+
+### Offline tests
+
+```sh
+npm test
+```
+
+Current result:
+
+```text
+Test Files  4 passed
+Tests       48 passed
+```
+
+Coverage includes:
+
+- original library behavior;
+- Claude Code hook adapter behavior;
+- Pi branch conversion and old/kept-region splitting;
+- Jev decision application for Pi;
+- verbatim old-region serialization;
+- fallback behavior when Jev fails or reduction is too small;
+- config precedence;
+- reliable-era package/README wiring.
+
+### Pi package/load check
+
+The extension was installed into Pi:
+
+```sh
+pi install git:github.com/reliable-era/fast-jev-compaction
+pi update --extensions
+```
+
+And load-checked with:
+
+```sh
+pi --no-extensions -e git:github.com/reliable-era/fast-jev-compaction --list-models __fast_jev_load_check__
+```
+
+Expected/observed successful behavior:
+
+```text
+No models matching "__fast_jev_load_check__"
+exit code 0
+```
+
+That command does not need the extension to provide a model; it verifies Pi can install and load the package without crashing.
+
+### tmux dispatch
+
+The validation run was dispatched in the `pi_plugin` tmux session/window:
+
+```text
+session: pi_plugin-32
+window:  fastjev-test
+```
+
+It ran:
+
+```sh
+npm run typecheck
+npm test
+pi --no-extensions -e git:github.com/reliable-era/fast-jev-compaction --list-models __fast_jev_load_check__
+```
+
+and completed successfully.
+
+## Configuration notes
+
+Pi-specific config is documented in:
+
+```text
+pi/README.md
+```
+
+Important controls:
+
+- `TYPESAFE_API_KEY` / `FAST_JEV_API_KEY`
+- `FAST_JEV_MODEL`
+- `FAST_JEV_KEEP_THRESHOLD`
+- `FAST_JEV_MIN_OLD_REDUCTION`
+- `FAST_JEV_TRUNCATE_HEAD_CHARS`
+- `FAST_JEV_DROP_THINKING`
+- `FAST_JEV_DISABLE=1` kill switch
+
+## Upstream/original behavior
+
+<details>
+<summary>Original project summary and inherited behavior</summary>
+
+The upstream project is a Claude Code plugin and npm library that replaces normal compaction summaries with Jev decisions. Every tool call/result is scored; stale ones are dropped or truncated; retained content stays verbatim.
+
+High-level algorithm:
+
+1. Pair each tool call with its tool result by `tool_use_id`.
+2. Send Jev a compact state representing the whole conversation.
+3. Ask two `noul` questions per non-pinned tool call: whether the call still matters and whether the result still matters verbatim.
+4. Apply decisions against `keepThreshold`:
+   - keep call and result;
+   - keep call but truncate result;
+   - or drop call and result.
+5. Rebuild the transcript without summarizing user/assistant text.
+
+The npm library exports helpers such as:
+
+- `compactMessages`
+- `compact`
+- `reductionRatio`
+- `collectToolCalls`
+- `fitState`
+- `batchCalls`
+- `decideCall`
+- `applyDecisions`
+
+Claude Code plugin files remain under:
+
+```text
+hooks/
+.claude-plugin/
+```
+
+</details>
 
 ## Development
 
 ```sh
 npm install
-npm run typecheck        # library + hook + pi extension
+npm run typecheck
 npm test
 npm run build
-npm run validate:plugin  # claude plugin validate
-TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
-network check; `npm run e2e:pi` additionally drives the pi extension through
-pi's own compaction machinery (it needs `@earendil-works/pi-coding-agent`
-installed).
-
-## Animated demo (macOS)
-
-`demo/JevDemo` is a small native SwiftUI app that plays a scripted, dramatized
-version of the compaction flow inside a Claude Code-style terminal: the tool
-calls of a canned transcript are scored, results and calls Jev lets go turn red
-and collapse away, and the rest stays verbatim. It never calls the API; it
-exists to be screen recorded.
+Optional/manual checks:
 
 ```sh
-demo/JevDemo/build.sh   # builds demo/JevDemo/build/JevDemo.app and launches it
+npm run validate:plugin
+TYPESAFE_API_KEY=... npm run demo
+npm run e2e:pi
 ```
 
-Press space in the app to replay from the start.
+`npm run e2e:pi` requires `@earendil-works/pi-coding-agent` to be available in the local development environment.
