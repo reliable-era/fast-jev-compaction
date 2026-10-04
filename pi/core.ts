@@ -39,14 +39,13 @@ export interface FastJevUserConfig {
   /** Minimum keep probability for a call or result to stay. Default 0.5. */
   keepThreshold?: number;
   /**
-   * Estimated token ceiling for the Jev state. UNSET = unlimited (the
-   * whole conversation goes to Jev). Set a finite number only to force
-   * a hard ceiling.
+   * Estimated token ceiling for the Jev state. Defaults to a conservative
+   * finite value so Pi does not send requests beyond Jev's API limit.
    */
   maxStateTokens?: number;
   /**
-   * Estimated ceiling for state plus one batch of questions. UNSET =
-   * unlimited. Set a finite number only to force batching.
+   * Estimated ceiling for state plus one batch of questions. Defaults to a
+   * conservative finite value so candidate questions are batched safely.
    */
   maxRequestTokens?: number;
   /** Characters of a dropped tool result retained before its note. Default 300. */
@@ -81,14 +80,13 @@ export interface ResolvedFastJevConfig {
   disabled: boolean;
 }
 
-// State/request ceilings default to UNLIMITED (Infinity): a hardcoded 25k
-// cap turned every long session into a built-in-summary fallback — exactly
-// the sessions where Jev compaction matters most. Explicit finite values
-// (config file, env) still honored. Mirrors src/compact.ts DEFAULT_OPTIONS.
+// Official Jev 1.13 limits are 64k tokens per request and 32k tokens for
+// state plus the longest question. Our counter is an estimate, so keep a safety
+// margin below both limits; explicit config file/env values still override.
 export const FAST_JEV_DEFAULTS: ResolvedFastJevConfig = {
   keepThreshold: 0.5,
-  maxStateTokens: Number.POSITIVE_INFINITY,
-  maxRequestTokens: Number.POSITIVE_INFINITY,
+  maxStateTokens: 28_000,
+  maxRequestTokens: 56_000,
   truncateHeadChars: 300,
   minOldReduction: 0.25,
   dropThinking: false,

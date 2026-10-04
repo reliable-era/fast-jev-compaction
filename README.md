@@ -177,7 +177,7 @@ Important controls:
 - `FAST_JEV_DROP_THINKING`
 - `FAST_JEV_DISABLE=1` kill switch
 
-The current library and Pi adapter default `maxStateTokens` and `maxRequestTokens` to **unlimited** when unset; explicit finite values still apply. The Claude Code plugin manifest declares `25000` / `30000` defaults. Record the resolved configuration for the evaluated integration rather than assuming all adapters share the same budgets. Pi's real kept window is host-controlled, not necessarily the library's six-message tail.
+The current library defaults `maxStateTokens` and `maxRequestTokens` to **unlimited** when called directly, but the Pi adapter defaults to `28000` / `56000`. TypeSafe's Models documentation for Jev 1.13 says the official limits are 64k tokens per request and 32k tokens for `state` plus the longest question; the Pi defaults leave margin for estimator error to avoid `max_tokens_exceeded` failures. Explicit finite values still apply. Record the resolved configuration for the evaluated integration rather than assuming all adapters share the same budgets. Pi's real kept window is host-controlled, not necessarily the library's six-message tail.
 
 ## Upstream/original behavior
 

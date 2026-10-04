@@ -403,13 +403,14 @@ describe('loadConfig', () => {
         env: { FAST_JEV_API_KEY: 'specific', TYPESAFE_API_KEY: 'generic' },
       }).apiKey,
     ).toBe('specific');
-    expect(
-      loadConfig({
-        agentDir: tmpC,
-        cwd: tmpC,
-        configDirName: '.pi',
-        env: { TYPESAFE_API_KEY: 'generic' },
-      }).apiKey,
-    ).toBe('generic');
+    const defaultCfg = loadConfig({
+      agentDir: tmpC,
+      cwd: tmpC,
+      configDirName: '.pi',
+      env: { TYPESAFE_API_KEY: 'generic' },
+    });
+    expect(defaultCfg.apiKey).toBe('generic');
+    expect(defaultCfg.maxStateTokens).toBe(28_000);
+    expect(defaultCfg.maxRequestTokens).toBe(56_000);
   });
 });

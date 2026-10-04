@@ -84,9 +84,8 @@ precedence:
   "apiKey": "optional; overrides the environment",
   "model": "jev-latest",
   "keepThreshold": 0.5,
-  // Optional hard ceilings. Leave unset for the default unlimited behavior.
-  // "maxStateTokens": 25000,
-  // "maxRequestTokens": 30000,
+  "maxStateTokens": 28000,
+  "maxRequestTokens": 56000,
   "truncateHeadChars": 300,
   "minOldReduction": 0.25,
   "dropThinking": false,
@@ -101,7 +100,7 @@ precedence:
 | `FAST_JEV_API_KEY` | API key (wins over `TYPESAFE_API_KEY`, loses to file) |
 | `FAST_JEV_MODEL` / `FAST_JEV_BASE_URL` / `FAST_JEV_GOAL` | Overrides |
 | `FAST_JEV_KEEP_THRESHOLD` / `FAST_JEV_TRUNCATE_HEAD_CHARS` / `FAST_JEV_MIN_OLD_REDUCTION` | Numeric overrides |
-| `FAST_JEV_MAX_STATE_TOKENS` / `FAST_JEV_MAX_REQUEST_TOKENS` | Optional hard ceilings; unset means unlimited |
+| `FAST_JEV_MAX_STATE_TOKENS` / `FAST_JEV_MAX_REQUEST_TOKENS` | Request ceilings; Pi defaults to 28000/56000. Jev 1.13 documents 64k tokens per request and 32k for state plus the longest question, so these defaults keep margin for estimator error. |
 | `FAST_JEV_DROP_THINKING=1` | Omit assistant thinking from the transcript |
 | `FAST_JEV_NOTIFY=0` | Silence toasts |
 | `FAST_JEV_DISABLE=1` | Kill switch: use pi's built-in compaction |
