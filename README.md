@@ -4,6 +4,8 @@ This fork adapts [`tamaratran/fast-jev-compaction`](https://github.com/tamaratra
 
 The important delta is not a new summarizer. It is a Pi extension that lets Pi compaction preserve old context as a Jev-pruned, mostly-verbatim transcript instead of relying only on an LLM-written summary.
 
+**Evaluation status:** three public benchmark subsets have been selected, but official task episodes and live Jev quality/cost comparisons have not been run. Benchmark results below are **TBD**, not measured scores. See [the evaluation protocol and metric definitions](evaluation.md).
+
 ## What we updated
 
 ### 1. Added Pi extension support
@@ -84,7 +86,9 @@ So the Pi extension cannot simply hand Pi a filtered message array. The practica
 4. write the old region into the compaction summary as a **verbatim serialized transcript**, with stale tool calls/results removed or truncated;
 5. fall back to Pi's built-in compaction if Jev is unavailable or reduction is insufficient.
 
-This preserves exact user/assistant text, commands, paths, errors, constraints, and retained tool outputs better than a normal lossy summary, while still reducing context size.
+On the selective path, retained user/assistant text, tool inputs, and kept tool outputs are serialized without LLM rewriting. Removed or truncated outputs can still contain necessary evidence, and summary fallback does not have this verbatim property. Whether this improves task success or total cost over a normal summary is an evaluation question, not an established result.
+
+Jev's decision state includes conversation text, tool metadata, and output length/error status, but **not the full tool-output payload**. Re-running a tool or re-reading a file may not recover an earlier observation after the source changes.
 
 ## How to use in Pi
 
@@ -110,94 +114,50 @@ Then use Pi normally:
 /compact
 ```
 
-or run the explicit command registered by the extension:
+The current Pi entry point intercepts Pi's compaction event; it does not register a separate `/fast-jev-compact` command. Pi's kept window remains real messages, while the pruned older region is stored in the compaction summary.
 
-```text
-/fast-jev-compact
-```
+## Evaluation
 
-## How we evaluated it
+We evaluate fast-Jev as a **context-management component inside a tool-using agent**, not as a standalone task-solving model. The primary question is whether it reduces the total cost of verified task completion without unacceptable loss of task success or critical evidence.
 
-### Static/type checks
+### Small-first benchmark pilot
 
-```sh
-npm run typecheck
-```
+At most three representative benchmarks are selected. Each uses a uniform random 10% sample without replacement, with fractional counts rounded up and master seed `20261004`.
 
-This runs:
+| Order | Benchmark | Population | Selected | Purpose | Task results |
+| --- | --- | ---: | ---: | --- | --- |
+| 1 | [LOCA-bench](https://github.com/hkust-nlp/LOCA-bench), 8K preset | 75 task/environment-seed cases | 8 | Controlled context growth; smallest integration setting first | TBD |
+| 2 | [Terminal-Bench 2.0](https://github.com/harbor-framework/terminal-bench-2) | 89 tasks | 9 | Shell/tool workflows with executable verifiers | TBD |
+| 3 | [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified), test split | 500 issues | 50 | Real repository repair with official patch grading | TBD |
 
-```text
-tsc --noEmit
-tsc -p tsconfig.hooks.json
-tsc -p tsconfig.pi.json
-```
+This is **67 cases per condition**, or 268 episodes for four conditions and one repetition. Those episodes have not been run. The 8K LOCA setting may not trigger compaction; a separately registered 32K pressure condition can reuse the same eight family/seed IDs. A uniform pilot is not a balanced sample or an official full-suite score.
 
-### Offline tests
+Compare raw history, cheap age-based output masking, LLM summarization, and fast-Jev with its recorded summary fallback. Keep the actor model, tools, task IDs, context window, and episode limits fixed. Evaluate the portable library and native Pi/Claude Code integrations as separately identified profiles.
+
+### Metrics and result placeholders
+
+| Metric group | Main measurements | Results |
+| --- | --- | --- |
+| Task quality | Official success/accuracy, paired success difference, timeout/overflow outcomes | TBD |
+| End-to-end efficiency | Total cost, cost per solved task, actor/selector/summary usage, cache effects | TBD |
+| Context reduction | Fully serialized actor-request tokens before/after; character reduction reported separately | TBD |
+| Latency | Episode wall time and compaction p50/p95, including network/scoring time | TBD |
+| Evidence and recovery | Critical-evidence recall on labeled checkpoints, re-reads, repeated commands, extra turns | TBD |
+| Reliability | Trigger coverage, fallback/error rates, pair integrity, cancellation and restart behavior | TBD |
+
+[**evaluation.md**](evaluation.md) defines denominators, formulas, logging requirements, result tables, and planned plots. A smaller transcript or an agent's self-reported completion is not proof of task success. Missing measurements remain unavailable, not zero.
+
+### Offline engineering verification
 
 ```sh
 npm test
-```
-
-Current result:
-
-```text
-Test Files  4 passed
-Tests       48 passed
-```
-
-Coverage includes:
-
-- original library behavior;
-- Claude Code hook adapter behavior;
-- Pi branch conversion and old/kept-region splitting;
-- Jev decision application for Pi;
-- verbatim old-region serialization;
-- fallback behavior when Jev fails or reduction is too small;
-- config precedence;
-- reliable-era package/README wiring.
-
-### Pi package/load check
-
-The extension was installed into Pi:
-
-```sh
-pi install git:github.com/reliable-era/fast-jev-compaction
-pi update --extensions
-```
-
-And load-checked with:
-
-```sh
-pi --no-extensions -e git:github.com/reliable-era/fast-jev-compaction --list-models __fast_jev_load_check__
-```
-
-Expected/observed successful behavior:
-
-```text
-No models matching "__fast_jev_load_check__"
-exit code 0
-```
-
-That command does not need the extension to provide a model; it verifies Pi can install and load the package without crashing.
-
-### tmux dispatch
-
-The validation run was dispatched in the `pi_plugin` tmux session/window:
-
-```text
-session: pi_plugin-32
-window:  fastjev-test
-```
-
-It ran:
-
-```sh
 npm run typecheck
-npm test
-pi --no-extensions -e git:github.com/reliable-era/fast-jev-compaction --list-models __fast_jev_load_check__
+npm run build
 ```
 
-and completed successfully.
+These checks exercise the library, hook adapter, Pi conversion/serialization/fallback logic, configuration, and package wiring. Type checks use the checked-in host declarations; mocked decisions do not establish live Jev scoring quality, benchmark task success, or production host compatibility.
+
+Benchmark preparation and offline checks must be kept separate from paid/live evaluation.
 
 ## Configuration notes
 
@@ -216,6 +176,8 @@ Important controls:
 - `FAST_JEV_TRUNCATE_HEAD_CHARS`
 - `FAST_JEV_DROP_THINKING`
 - `FAST_JEV_DISABLE=1` kill switch
+
+The current library and Pi adapter default `maxStateTokens` and `maxRequestTokens` to **unlimited** when unset; explicit finite values still apply. The Claude Code plugin manifest declares `25000` / `30000` defaults. Record the resolved configuration for the evaluated integration rather than assuming all adapters share the same budgets. Pi's real kept window is host-controlled, not necessarily the library's six-message tail.
 
 ## Upstream/original behavior
 
@@ -272,4 +234,4 @@ TYPESAFE_API_KEY=... npm run demo
 npm run e2e:pi
 ```
 
-`npm run e2e:pi` requires `@earendil-works/pi-coding-agent` to be available in the local development environment.
+`npm run e2e:pi` requires `@earendil-works/pi-coding-agent` to be available in the local development environment **and makes a real Jev API call**. The demo also uses a live service; they are not part of the offline benchmark warm-up.

@@ -689,7 +689,7 @@ export async function jevCompactionForPi(params: {
 
   // Do not attach Jev usage to Pi's model-usage ledger. Jev billing/spend limits
   // are external to Pi, and reporting these tokens as Pi usage can make Pi display
-  // misleading approved-spending-limit/accounting messages. Token counts remain
+  // misleading spend-ledger/accounting messages. Token counts remain
   // available in details.fastJev.jev for diagnostics.
   const usage: PiUsage | undefined = undefined;
 
