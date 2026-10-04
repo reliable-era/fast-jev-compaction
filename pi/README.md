@@ -25,8 +25,8 @@ minus what Jev drops:
   were kept in an earlier round can be pruned in a later one — nothing is
   ever frozen as text. (pi's session entries are append-only; the extension
   reconstructs from them each time.)
-- Jev token usage is reported into the session's usage totals, and the
-  decision log is stored in the compaction entry's `details.fastJev`.
+- Jev token usage and the decision log are stored in the compaction entry's
+  `details.fastJev`; Jev usage is not added to Pi's model-spend ledger.
 
 **Fallback:** when the API key is missing, when Jev fails, or when the old
 region cannot be reduced by at least `minOldReduction` (default 25%), the

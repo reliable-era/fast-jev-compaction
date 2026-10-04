@@ -254,8 +254,7 @@ describe('jevCompactionForPi', () => {
     expect(d.decisions.map((x) => x.action)).toEqual(['keep', 'drop_call', 'drop_result', 'keep']);
     expect(d.jev.inputTokens).toBe(1000);
     expect(d.jev.outputTokens).toBe(7);
-    expect(outcome.usage?.input).toBe(1000);
-    expect(outcome.usage?.totalTokens).toBe(1007);
+    expect(outcome.usage).toBeUndefined();
     expect(outcome.oldReduction).toBeGreaterThan(0.25);
     expect(outcome.tokensBefore).toBe(12_345);
     expect(outcome.firstKeptEntryId).toBe(keptEntryId);

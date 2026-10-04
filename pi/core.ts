@@ -687,17 +687,11 @@ export async function jevCompactionForPi(params: {
     },
   };
 
-  const usage: PiUsage | undefined =
-    inputTokens + outputTokens > 0
-      ? {
-          input: inputTokens,
-          output: outputTokens,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: inputTokens + outputTokens,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        }
-      : undefined;
+  // Do not attach Jev usage to Pi's model-usage ledger. Jev billing/spend limits
+  // are external to Pi, and reporting these tokens as Pi usage can make Pi display
+  // misleading approved-spending-limit/accounting messages. Token counts remain
+  // available in details.fastJev.jev for diagnostics.
+  const usage: PiUsage | undefined = undefined;
 
   const report =
     `fast-jev: ${Math.round(oldReduction * 100)}% of old region pruned, ` +
