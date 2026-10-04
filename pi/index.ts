@@ -41,7 +41,8 @@ export default function (pi: ExtensionAPI) {
     if (config.disabled) return; // silently use pi's built-in compaction
     if (event.signal.aborted) return { cancel: true };
     if (!config.apiKey) {
-      notify('fast-jev: no TYPESAFE_API_KEY, using built-in summary', 'warning');
+      // Do not emit a warning here: a missing Jev key is an expected opt-out path.
+      // notify('fast-jev: no TYPESAFE_API_KEY, using built-in summary', 'warning');
       return;
     }
 
@@ -62,7 +63,8 @@ export default function (pi: ExtensionAPI) {
 
     if (!outcome.ok) {
       if (event.signal.aborted) return { cancel: true };
-      notify(`fast-jev: using built-in summary (${outcome.fallback})`, 'warning');
+      // Do not warn on normal fallback paths such as insufficient reduction.
+      // notify(`fast-jev: using built-in summary (${outcome.fallback})`, 'warning');
       return;
     }
 
