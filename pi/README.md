@@ -38,14 +38,14 @@ fallback semantics as the Claude Code hook.
 ### As a pi package (recommended)
 
 ```sh
-pi install git:github.com/tamaratran/fast-jev-compaction
+pi install git:github.com/reliable-era/fast-jev-compaction
 ```
 
 or in `~/.pi/agent/settings.json`:
 
 ```json
 {
-  "packages": ["git:github.com/tamaratran/fast-jev-compaction"]
+  "packages": ["git:github.com/reliable-era/fast-jev-compaction"]
 }
 ```
 

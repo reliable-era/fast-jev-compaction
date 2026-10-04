@@ -169,7 +169,7 @@ repository manifest (`"pi": { "extensions": ["./pi/index.ts"] }`) lets pi
 install it as a package:
 
 ```sh
-pi install git:github.com/tamaratran/fast-jev-compaction
+pi install git:github.com/reliable-era/fast-jev-compaction
 ```
 
 pi's compaction replaces the context with a summary plus the messages after
