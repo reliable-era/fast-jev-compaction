@@ -15,8 +15,9 @@ kept window (the recent ~20k tokens) untouched as real messages and writes
 the **old region into the summary as a verbatim serialized transcript**,
 minus what Jev drops:
 
-- Every `tool_use`/`tool_result` pair before the kept window is scored by
-  Jev (two `noul` questions each: keep the call, keep the result verbatim).
+- Each fitting `tool_use`/`tool_result` pair before the kept window is scored
+  by Jev (two `noul` questions each). Pairs that cannot fit safely remain unscored
+  and are kept.
 - Dropped calls disappear together with their results; dropped results keep
   a bounded head plus a re-run note; everything kept is reproduced
   word-for-word (user text, assistant text, assistant thinking, tool inputs
@@ -27,6 +28,25 @@ minus what Jev drops:
   reconstructs from them each time.)
 - Jev token usage and the decision log are stored in the compaction entry's
   `details.fastJev`; Jev usage is not added to Pi's model-spend ledger.
+
+**Long histories and oversized requests:** the shared core first tries a global
+state with question capacity reserved. If it cannot fit, or would require
+collapsed text/one-line calls, it recursively scores smaller history windows.
+Each window carries the task goal, first message, recent pinned context and
+its own history span. Unfittable singleton candidates stay untouched. On HTTP
+400 `max_tokens_exceeded`, it rebuilds with smaller budgets (up to three
+resizing retries). Only this structured size error is retried; other errors
+still fall back. The compaction AbortSignal stops queued work and retries.
+Jev requests run with at most four concurrent batches.
+
+The library and Pi defaults are 28000 state / 56000 whole-request estimated
+tokens. Both Jev limits are enforced independently: 32k for state plus the
+longest question, 64k for the entire request. Overrides cannot bypass them.
+Estimates and windowing do not guarantee downstream evidence preservation.
+Recovery diagnostics are stored in `details.fastJev.jev`: `requests` counts
+all dispatched attempts, `retries` counts resizing rounds, `windows` counts
+final-plan windows (zero for a global state), and `unasked` counts candidates
+kept without scoring. Retry/concurrency options are currently library-only.
 
 **Fallback:** when the API key is missing, when Jev fails, or when the old
 region cannot be reduced by at least `minOldReduction` (default 25%), the

@@ -540,6 +540,9 @@ export interface FastJevDetails {
       requests: number;
       stateTokens: number;
       stateStage: string;
+      retries: number;
+      windows: number;
+      unasked: number;
       inputTokens: number;
       outputTokens: number;
       ms: number;
@@ -593,6 +596,7 @@ export async function jevCompactionForPi(params: {
   tokensBefore: number;
   asker: JevAsker;
   config: ResolvedFastJevConfig;
+  signal?: AbortSignal;
 }): Promise<FastJevSuccess | FastJevFallback> {
   const { branchEntries, firstKeptEntryId, tokensBefore, asker, config } = params;
 
@@ -624,6 +628,7 @@ export async function jevCompactionForPi(params: {
       preserveRecentMessages: pinnedCount,
       maxStateTokens: config.maxStateTokens,
       maxRequestTokens: config.maxRequestTokens,
+      signal: params.signal,
       truncateHeadChars: config.truncateHeadChars,
     });
   } catch (error) {
@@ -671,6 +676,9 @@ export async function jevCompactionForPi(params: {
         requests: stats.requests,
         stateTokens: stats.stateTokens,
         stateStage: stats.stateStage,
+        retries: stats.retries,
+        windows: stats.windows,
+        unasked: stats.unasked,
         inputTokens,
         outputTokens,
         ms: stats.ms,

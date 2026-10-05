@@ -78,7 +78,7 @@ export interface HistoryEntry {
   tool_calls?: HistoryToolCall[] | string[];
 }
 
-/** The state sent with every Jev request: the whole history, results omitted. */
+/** Conversation context sent to Jev: global or windowed, results omitted. */
 export interface CompactionState {
   context: string;
   goal: string;
@@ -99,19 +99,16 @@ export interface CompactOptions {
   keepThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
-  /**
-   * Estimated token ceiling for the state. UNSET = unlimited: the whole
-   * conversation goes to Jev (Jev takes large states; truncation stages
-   * still run for oversized inputs, just never throw). Set a finite number
-   * only to force a hard ceiling (tests, constrained callers).
-   */
+  /** Estimated state ceiling. Default 28000; provider limits also apply. */
   maxStateTokens?: number;
-  /**
-   * Estimated token ceiling for state plus one batch of questions. UNSET =
-   * unlimited: all candidate questions go in as few batches as fit, with
-   * no artificial split. Set a finite number only to force batching.
-   */
+  /** Estimated whole-request ceiling. Default 56000; capped at Jev's 64000 limit. */
   maxRequestTokens?: number;
+  /** Payload-resizing retries after max_tokens_exceeded. Default 3; maximum 8. */
+  maxTokenRetries?: number;
+  /** Concurrent batches per compaction. Default 4; maximum 16. */
+  maxConcurrentRequests?: number;
+  /** Stop queued batches and resizing retries when aborted. */
+  signal?: AbortSignal;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
 }
@@ -122,6 +119,9 @@ export interface ResolvedCompactOptions {
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
+  maxTokenRetries: number;
+  maxConcurrentRequests: number;
+  signal?: AbortSignal;
   truncateHeadChars: number;
 }
 
@@ -140,9 +140,16 @@ export interface CompactResult {
     callsDropped: number;
     pinned: number;
     stateTokens: number;
-    /** Which fitting stage the state needed, '' when no request was made. */
+    /** Final fitting/window plan; '' when there were no candidates to plan. */
     stateStage: string;
+    /** Actual dispatched requests, including rejected attempts. */
     requests: number;
+    /** Number of payload-resizing retries. */
+    retries: number;
+    /** History windows in the final plan (0 for a global state). */
+    windows: number;
+    /** Candidates that could not be safely fitted and were kept without scoring. */
+    unasked: number;
     ms: number;
   };
 }

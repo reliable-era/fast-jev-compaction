@@ -59,6 +59,7 @@ export default function (pi: ExtensionAPI) {
       tokensBefore: event.preparation.tokensBefore,
       asker,
       config,
+      signal: event.signal,
     });
 
     if (!outcome.ok) {

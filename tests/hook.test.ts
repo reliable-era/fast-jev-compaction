@@ -4,6 +4,7 @@ import {
   decisionLog,
   decisionLogLines,
   resolveHookConfig,
+  register,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
@@ -125,6 +126,45 @@ describe('compactSession', () => {
     expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
     expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
+  });
+
+  it('recovers HTTP max_tokens_exceeded through the hook transport', async () => {
+    const input = [message('user', 'Fix the failing test.')];
+    for (let i = 0; i < 40; i++) {
+      input.push(call(`w${i}`, 'Read', { path: `src/module${i}.ts` }, fileA), result(`w${i}`, fileA));
+    }
+    input.push(message('user', 'continue'));
+    let asks = 0;
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const output = await compactSession(input, config, async (url, init) => {
+      if (++asks === 1) return { status: 400, ok: false, text: '{"detail":{"error_type":"max_tokens_exceeded"}}' };
+      return jevFetch(() => 0.1)(url, init);
+    });
+    expect(output.result.stats.retries).toBe(1);
+    expect(output.result.stats.requests).toBe(asks);
+    expect(output.messages[0]).toBe(input[0]);
+    expect(output.messages.at(-1)).toBe(input.at(-1));
+  });
+
+  it('cancels an aborted hook dispatch without invoking built-in summary or size retries', async () => {
+    const handlers = new Map<string, (...args: any[]) => any>();
+    register(((event: string, handler: (...args: any[]) => any) => handlers.set(event, handler)) as never,
+      { apiKey: 'k', preserveRecentMessages: 1 });
+    const controller = new AbortController();
+    let asks = 0;
+    let fallbacks = 0;
+    const next = Object.assign(async () => { fallbacks++; return {}; }, { signal: controller.signal });
+    const output = await handlers.get('session.compact')!({
+      http: { fetch: async () => {
+        asks++;
+        controller.abort();
+        return { status: 400, ok: false, text: '{"detail":{"error_type":"max_tokens_exceeded"}}' };
+      } },
+      ui: { log: () => {}, toast: () => {} },
+    }, { messages: transcript() }, next);
+    expect(output).toEqual({ skip: 'fast-jev-compaction: interrupted' });
+    expect(asks).toBe(1);
+    expect(fallbacks).toBe(0);
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {

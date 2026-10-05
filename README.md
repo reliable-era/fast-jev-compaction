@@ -60,13 +60,29 @@ It verifies that:
 - Pi host packages are optional peers, not bundled runtime dependencies;
 - README/package metadata point to `reliable-era`, not the original install path.
 
-### 4. Kept upstream functionality intact
+### 4. Preserved upstream interfaces and adapters
 
 The original pieces remain available:
 
 - npm library under `src/`;
 - Claude Code plugin under `hooks/` and `.claude-plugin/`;
-- existing compaction algorithm and tests.
+- shared compaction interfaces and regression tests.
+
+### 5. Adopted upstream long-history fixes
+
+The shared library now ports focused changes from upstream PRs rather than replacing the compactor:
+
+| Upstream contribution | Adopted behavior |
+| --- | --- |
+| [#85](https://github.com/tamaratran/fast-jev-compaction/pull/85) | More conservative estimates for dense hashes, UUIDs and base64; additional non-ASCII margin in this fork |
+| [#49](https://github.com/tamaratran/fast-jev-compaction/pull/49) / [#55](https://github.com/tamaratran/fast-jev-compaction/pull/55) | Fit state after reserving question capacity; enforce both provider token limits |
+| [#119](https://github.com/tamaratran/fast-jev-compaction/pull/119) | Recursively split candidate calls into history windows carrying the goal, first message and recent pinned context; keep unfittable candidates |
+| [#44](https://github.com/tamaratran/fast-jev-compaction/pull/44) / #49 | Bound concurrent batches and stop queued work on failure |
+| [#40](https://github.com/tamaratran/fast-jev-compaction/pull/40) / [#42](https://github.com/tamaratran/fast-jev-compaction/pull/42) / #49 | Reject malformed probabilities and ambiguous/reversed tool pairs before pruning; protect pinned calls in the exported application helper |
+
+Fork-specific additions: on a structured HTTP 400 `max_tokens_exceeded`, rebuild from the original transcript with smaller state/request budgets, up to three resizing retries. Size the reduction from the rejected payload, not just the configured ceilings. Wait for started work before retrying and discard partial answers from the failed plan. Cancellation and non-size errors do not trigger these retries.
+
+Windowing also starts when global fitting would collapse text or replace calls with one-line records, not only when fitting throws. Question headroom is recalculated per window, so one oversized candidate does not block fitting siblings. A singleton with oversized questions or one that still requires these late fitting stages is kept unscored. This is a conservative mechanism, **not a guarantee of evidence retention**: head/tail abridgement, missing tool-output contents, and cross-window dependencies remain evaluation risks. No new semantic summarizer or output archive was added, and the keep-threshold default remains `0.5`.
 
 ## Why we did this
 
@@ -177,7 +193,11 @@ Important controls:
 - `FAST_JEV_DROP_THINKING`
 - `FAST_JEV_DISABLE=1` kill switch
 
-The current library defaults `maxStateTokens` and `maxRequestTokens` to **unlimited** when called directly, but the Pi adapter defaults to `28000` / `56000`. TypeSafe's Models documentation for Jev 1.13 says the official limits are 64k tokens per request and 32k tokens for `state` plus the longest question; the Pi defaults leave margin for estimator error to avoid `max_tokens_exceeded` failures. Explicit finite values still apply. Record the resolved configuration for the evaluated integration rather than assuming all adapters share the same budgets. Pi's real kept window is host-controlled, not necessarily the library's six-message tail.
+The shared library and Pi adapter now default to **28000 state tokens / 56000 request tokens**. [Jev 1.13's documented limits](https://docs.typesafe.ai/models) are **32k for state plus the longest question** and **64k for the entire request**. Overrides are clamped to those provider ceilings; `Infinity` no longer bypasses dispatch limits. Smaller caller budgets still apply. Estimates are not provider-exact, so a rejected request can trigger bounded resizing and history windowing before summary fallback.
+
+Library options also include `maxTokenRetries` (default 3, range 0–8), `maxConcurrentRequests` (default 4, range 1–16), and `signal` (`AbortSignal`). `stats.requests` counts actual dispatched attempts, including rejected ones; `stats.retries`, `stats.windows`, and `stats.unasked` expose recovery and conservative retention. Pi stores these in `details.fastJev.jev` without adding Jev usage to Pi's spend ledger. The Pi JSON/environment config continues to expose its existing options; retry/concurrency controls are currently library-only.
+
+The Claude Code manifest retains its 25000/30000 configured defaults, with the same shared recovery logic. Record resolved configuration rather than assuming all adapters share budgets. Pi's real kept window is host-controlled, not necessarily the library's six-message tail.
 
 ## Upstream/original behavior
 

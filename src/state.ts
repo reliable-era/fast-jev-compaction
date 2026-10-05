@@ -9,33 +9,64 @@ import type {
 } from './types.js';
 
 export const STATE_CONTEXT =
-  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
+  'A coding assistant conversation is being compacted to free context. `history` is conversation context, oldest first (it may be a local window with the goal and recent context); tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
 
 /** Successive caps on the serialised tool input included per call. */
 const INPUT_CHARS = [1000, 200, 60] as const;
 const TEXT_HEAD = 400;
 const TEXT_TAIL = 150;
 
-const TOKEN_PIECES = /[A-Za-z]+|\d+|[^\sA-Za-z\d]/g;
+const ALNUM_RUN = /[A-Za-z0-9]+/g;
 
 /**
- * Estimates tokens without a tokenizer: a word costs one token per six
- * letters, a digit half a token, any other symbol nine tenths. Calibrated
- * against the usage Jev reports for real transcripts, where it lands 2–18%
- * above the true count; a plain characters-per-token ratio undercounts the
- * JSON-heavy states by up to 40%.
+ * Heuristic, not a provider tokenizer. Adapted from upstream PR #85: dense
+ * hashes/UUIDs/base64 cost at least one token per three characters. Ordinary
+ * words retain the legacy price. Non-ASCII code points receive extra margin;
+ * provider rejection still requires bounded shrink-and-retry recovery.
  */
 export function estimateTokens(text: string): number {
   let tokens = 0;
-  for (const [piece] of text.matchAll(TOKEN_PIECES)) {
-    const first = piece.charCodeAt(0);
-    if (first >= 48 && first <= 57) tokens += piece.length / 2;
-    else if ((first >= 65 && first <= 90) || (first >= 97 && first <= 122)) {
-      tokens += 1 + Math.floor((piece.length - 1) / 6);
-    } else tokens += 0.9;
+  let last = 0;
+  for (const match of text.matchAll(ALNUM_RUN)) {
+    const run = match[0];
+    const plain = runTokens(run);
+    tokens += separatorTokens(text.slice(last, match.index))
+      + (isDenseRun(run) ? Math.max(plain, run.length / 3) : plain);
+    last = match.index + run.length;
   }
-  return Math.ceil(tokens);
+  return Math.ceil(tokens + separatorTokens(text.slice(last)));
 }
+
+function separatorTokens(chunk: string): number {
+  let tokens = 0;
+  for (const char of chunk) {
+    if (/\s/.test(char)) continue;
+    const code = char.codePointAt(0)!;
+    tokens += code > 0xffff ? 2 : code > 0x7f ? 1 : 0.9;
+  }
+  return tokens;
+}
+
+function runTokens(run: string): number {
+  let tokens = 0;
+  for (const [piece] of run.matchAll(/[A-Za-z]+|\d+/g)) {
+    tokens += /^\d/.test(piece) ? piece.length / 2 : 1 + Math.floor((piece.length - 1) / 6);
+  }
+  return tokens;
+}
+
+function isDenseRun(run: string): boolean {
+  if (run.length < 8) return false;
+  const hasDigit = /\d/.test(run);
+  const hasLetter = /[A-Za-z]/.test(run);
+  if (hasDigit) return hasLetter;
+  if (!hasLetter || run.length < 16) return false;
+  const vowels = run.match(/[aeiouAEIOU]/g)?.length ?? 0;
+  return vowels / run.length < 0.25 && new Set(run).size >= 8;
+}
+
+/** A local fitting failure, distinct from transport or response errors. */
+export class HistoryTooLargeError extends Error {}
 
 export function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
@@ -63,9 +94,19 @@ export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
 ): ToolCall[] {
+  // Upstream PR #42/#49: ambiguous IDs can let a scored deletion remove a
+  // different, pinned or unscored call. Reject before planning or dispatch.
   const results = new Map<string, { index: number; result: ToolResult }>();
+  const uses = new Set<string>();
+  for (const message of messages) {
+    for (const tool of message.toolUses) {
+      if (uses.has(tool.tool_use_id)) throw new Error(`Duplicate tool_use_id: ${tool.tool_use_id}`);
+      uses.add(tool.tool_use_id);
+    }
+  }
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
+      if (results.has(result.tool_use_id)) throw new Error(`Duplicate tool_result: ${result.tool_use_id}`);
       results.set(result.tool_use_id, { index, result });
     }
   });
@@ -74,6 +115,7 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
+      if (found.index < callIndex) throw new Error(`Tool result precedes its call: ${tool.tool_use_id}`);
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
@@ -298,7 +340,7 @@ export function fitState(
   tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   if (fits()) return fitted(history, tokens, 'old calls merged');
 
-  throw new Error(
+  throw new HistoryTooLargeError(
     `history too large for Jev (~${tokens} tokens after truncation, limit ${options.maxStateTokens})`,
   );
 }

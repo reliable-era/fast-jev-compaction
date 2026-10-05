@@ -166,9 +166,10 @@ export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
+  signal?: AbortSignal,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), { ...config, signal });
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -266,7 +267,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
-      });
+      }, next.signal);
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
@@ -281,6 +282,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       return { messages };
     } catch (error) {
+      if (next.signal?.aborted) return { skip: 'fast-jev-compaction: interrupted' };
       notify(
         $,
         `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,

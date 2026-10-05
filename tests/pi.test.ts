@@ -11,7 +11,7 @@ import {
   EXTENSION_VERSION,
   type ResolvedFastJevConfig,
 } from '../pi/core.ts';
-import { collectToolCalls, type JevAsker, type JevQuestions, type JevResponse } from '../src/index.js';
+import { collectToolCalls, JevRequestError, type JevAsker, type JevQuestions, type JevResponse } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
 // A synthetic pi session branch (structural SessionEntry objects)
@@ -286,6 +286,100 @@ describe('jevCompactionForPi', () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.fallback).toContain('Jev failed: boom');
+  });
+
+  it('recovers an oversized request and records diagnostics without changing the kept boundary', async () => {
+    let asks = 0;
+    const expanded = structuredClone(entries);
+    const firstAssistant = expanded.find((entry) => entry.message.role === 'assistant')!;
+    if (firstAssistant.message.role === 'assistant') {
+      firstAssistant.message.content.push({ type: 'text', text: 'Investigating the build and checking dependencies. '.repeat(500) });
+    }
+    const original = structuredClone(expanded);
+    const outcome = await jevCompactionForPi({
+      branchEntries: expanded as never,
+      firstKeptEntryId: keptEntryId,
+      tokensBefore: 12_345,
+      config: { ...CONFIG, minOldReduction: 0 },
+      asker: { ask: async (state, questions) => {
+        if (++asks === 1) throw new JevRequestError(400, '{"detail":{"error_type":"max_tokens_exceeded"}}');
+        return fakeJev.ask(state, questions);
+      } },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.details.fastJev.jev.retries).toBe(1);
+    expect(outcome.details.fastJev.jev.windows).toBeGreaterThanOrEqual(0);
+    expect(outcome.details.fastJev.jev.requests).toBe(asks);
+    expect(outcome.details.fastJev.jev.inputTokens).toBe((asks - 1) * 1000);
+    expect(outcome.details.fastJev.jev.unasked).toBe(0);
+    expect(outcome.firstKeptEntryId).toBe(keptEntryId);
+    expect(outcome.summary).not.toContain('Done, all tests pass now.');
+    expect(outcome.usage).toBeUndefined();
+    expect(expanded).toEqual(original);
+  });
+
+  it.each(['duplicate IDs', 'invalid probabilities'] as const)(
+    'returns a clean summary-fallback outcome on %s', async (kind) => {
+      const input = structuredClone(entries);
+      if (kind === 'duplicate IDs') {
+        for (const entry of input) {
+          if (entry.message.role === 'assistant') {
+            for (const block of entry.message.content) {
+              if (block.type === 'toolCall' && block.id === 'call_glob') block.id = 'call_read_a';
+            }
+          }
+        }
+      }
+      const original = structuredClone(input);
+      let asks = 0;
+      const outcome = await jevCompactionForPi({
+        branchEntries: input as never,
+        firstKeptEntryId: keptEntryId,
+        tokensBefore: 1,
+        config: CONFIG,
+        asker: { ask: async (_s, q) => {
+          asks++;
+          return { answers: Object.fromEntries(Object.keys(q).map((key) => [key, { noul: -1 }])) };
+        } },
+      });
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.fallback).toMatch(kind === 'duplicate IDs' ? /Duplicate tool_use_id/ : /Invalid Jev answer/);
+      expect(asks).toBe(kind === 'duplicate IDs' ? 0 : 1);
+      expect(input).toEqual(original);
+    },
+  );
+
+  it('preserves summary fallback when oversized requests cannot recover', async () => {
+    const outcome = await jevCompactionForPi({
+      branchEntries: entries as never,
+      firstKeptEntryId: keptEntryId,
+      tokensBefore: 1,
+      config: CONFIG,
+      asker: { ask: async () => {
+        throw new JevRequestError(400, '{"detail":{"error_type":"max_tokens_exceeded"}}');
+      } },
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.fallback).toContain('max_tokens_exceeded');
+  });
+
+  it('honors the compaction AbortSignal before dispatch', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let asks = 0;
+    const outcome = await jevCompactionForPi({
+      branchEntries: entries as never,
+      firstKeptEntryId: keptEntryId,
+      tokensBefore: 1,
+      config: CONFIG,
+      signal: controller.signal,
+      asker: { ask: async (s, q) => { asks++; return fakeJev.ask(s, q); } },
+    });
+    expect(outcome.ok).toBe(false);
+    expect(asks).toBe(0);
   });
 
   it('falls back when reduction is below the minimum', async () => {

@@ -76,11 +76,13 @@ describe('options', () => {
     expect(resolveOptions()).toMatchObject({
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
-      maxStateTokens: Number.POSITIVE_INFINITY,
-      maxRequestTokens: Number.POSITIVE_INFINITY,
+      maxStateTokens: 28_000,
+      maxRequestTokens: 56_000,
+      maxTokenRetries: 3,
+      maxConcurrentRequests: 4,
       truncateHeadChars: 300,
     });
-    // Explicit finite caps still honored (opt-in ceiling, not default).
+    // Explicit smaller ceilings are still honored.
     expect(resolveOptions({ maxStateTokens: 5000, maxRequestTokens: 8000 })).toMatchObject({
       maxStateTokens: 5000,
       maxRequestTokens: 8000,
@@ -160,7 +162,7 @@ describe('state fitting', () => {
       ...fit,
       maxStateTokens: 300,
     });
-    expect(stage).toBe('inputs<=200');
+    expect(stage).toMatch(/^inputs<=/);
     expect(tokens).toBeLessThanOrEqual(300);
     expect(state.history[0]?.text).toBe('start');
     expect((state.history[1]?.tool_calls?.[0] as HistoryToolCall).input.length).toBeLessThanOrEqual(200);
@@ -230,9 +232,8 @@ describe('state fitting', () => {
     expect(() => fitState(messages, [], { ...fit, maxStateTokens: 50 })).toThrow(/too large/);
   });
 
-  it('default path never throws: large histories fit whole (no 25k wall)', () => {
-    // Regression: a hardcoded 25k default turned every long session into
-    // a built-in-summary fallback. Unset caps mean the full state goes.
+  it('allows an explicitly unlimited fitState inspection without dispatching a request', () => {
+    // fitState is a standalone helper; compact() enforces the provider ceilings.
     const messages = [
       message('user', 'x'.repeat(100_000)),
       message('assistant', 'y'.repeat(100_000)),
@@ -246,7 +247,7 @@ describe('state fitting', () => {
     expect(fitted.tokens).toBeGreaterThan(25_000);
   });
 
-  it('unlimited request budget batches everything together', () => {
+  it('fits small batches even when the requested budget is unlimited', () => {
     const calls = [
       { id: 't1', tool: 'a', input: {}, callIndex: 0, resultIndex: 1, resultChars: 10, pinned: false },
       { id: 't2', tool: 'b', input: {}, callIndex: 2, resultIndex: 3, resultChars: 10, pinned: false },
@@ -375,7 +376,7 @@ describe('compact', () => {
     const output = await compact(
       messages,
       fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen),
-      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150 },
+      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 230 },
     );
 
     expect(output.stats.requests).toBe(seen.length);

@@ -35,6 +35,34 @@ export function buildJevRequest(
   };
 }
 
+/** Structured HTTP failure so only token-limit rejections trigger resizing. */
+export class JevRequestError extends Error {
+  readonly errorType?: string;
+
+  constructor(readonly status: number, text: string) {
+    super(`Jev request failed (${status}): ${text.slice(0, 200)}`);
+    this.name = 'JevRequestError';
+    try {
+      const parsed = JSON.parse(text);
+      const errorType = parsed?.detail?.error_type;
+      if (typeof errorType === 'string') this.errorType = errorType;
+    } catch {
+      // HTML/non-JSON errors remain ordinary HTTP failures, never size retries.
+    }
+  }
+}
+
+export function isTokenLimitError(error: unknown): boolean {
+  return error instanceof JevRequestError
+    && error.status === 400
+    && error.errorType === 'max_tokens_exceeded';
+}
+
+// Response validation adapted from upstream PR #40/#49.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /** Validates a Jev response body; throws on anything but an `answers` object. */
 export function parseJevResponse(
   status: number,
@@ -42,7 +70,7 @@ export function parseJevResponse(
   text: string,
 ): JevResponse {
   if (!ok) {
-    throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);
+    throw new JevRequestError(status, text);
   }
   let parsed: unknown;
   try {
@@ -50,13 +78,7 @@ export function parseJevResponse(
   } catch {
     throw new Error('Jev returned malformed JSON');
   }
-  if (
-    parsed === null ||
-    typeof parsed !== 'object' ||
-    !('answers' in parsed) ||
-    parsed.answers === null ||
-    typeof parsed.answers !== 'object'
-  ) {
+  if (!isRecord(parsed) || !isRecord(parsed.answers)) {
     throw new Error('Jev response is missing answers');
   }
   return parsed as JevResponse;
@@ -67,12 +89,16 @@ export function noulAnswer(
   answers: Record<string, JevAnswer>,
   name: string,
 ): number {
-  const answer = answers[name];
+  const answer: unknown = isRecord(answers) && Object.hasOwn(answers, name)
+    ? answers[name]
+    : undefined;
   if (
-    !answer ||
-    !('noul' in answer) ||
+    !isRecord(answer) ||
+    !Object.hasOwn(answer, 'noul') ||
+    (answer.type !== undefined && answer.type !== 'noul') ||
     typeof answer.noul !== 'number' ||
-    !Number.isFinite(answer.noul)
+    !Number.isFinite(answer.noul) ||
+    answer.noul < 0 || answer.noul > 1
   ) {
     throw new Error(`Invalid Jev answer for ${name}`);
   }
